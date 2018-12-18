@@ -137,13 +137,15 @@ namespace OliveVSIX.NugetPacker
 
             var process = System.Diagnostics.Process.Start(startInfo);
 
-            Task.WhenAny(Task.Delay(5000), Task.Factory.StartNew(process.WaitForExit)).Wait();
+            //Task.WhenAny(Task.Delay(60000), Task.Factory.StartNew(process.WaitForExit)).Wait();
 
-            if (!process.HasExited)
-            {
-                message = "Build did not complete after 5 seconds.";
-                return false;
-            }
+            Task.Factory.StartNew(process.WaitForExit).Wait();
+
+            //if (!process.HasExited)
+            //{
+            //    message = "Build did not complete after 60 seconds.";
+            //    return false;
+            //}
 
             if (process.ExitCode == 0)
             {
