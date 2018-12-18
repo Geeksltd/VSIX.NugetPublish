@@ -1,8 +1,7 @@
-﻿using System;
-using System.ComponentModel.Design;
-using System.Globalization;
-using Microsoft.VisualStudio.Shell;
+﻿using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using System;
+using System.ComponentModel.Design;
 
 namespace OliveVSIX.NugetPacker
 {
@@ -11,7 +10,7 @@ namespace OliveVSIX.NugetPacker
     /// </summary>
     internal sealed class NugetPacker
     {
-        bool ExceptionOccurred;
+        private bool ExceptionOccurred;
 
         /// <summary>
         /// Command ID.
@@ -26,14 +25,14 @@ namespace OliveVSIX.NugetPacker
         /// <summary>
         /// VS Package that provides this command, not null.
         /// </summary>
-        readonly Package package;
+        private readonly Package package;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="NugetPacker"/> class.
         /// Adds our command handlers for menu (commands must exist in the command table file)
         /// </summary>
         /// <param name="package">Owner package, not null.</param>
-        NugetPacker(Package package)
+        private NugetPacker(Package package)
         {
             this.package = package ?? throw new ArgumentNullException("package");
 
@@ -48,7 +47,7 @@ namespace OliveVSIX.NugetPacker
             }
         }
 
-        void NugetPackerLogic_OnException(object sender, Exception arg)
+        private void NugetPackerLogic_OnException(object sender, Exception arg)
         {
             ExceptionOccurred = true;
 
@@ -61,7 +60,7 @@ namespace OliveVSIX.NugetPacker
                 OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
         }
 
-        void NugetPackerLogic_OnCompleted(object sender, EventArgs e)
+        private void NugetPackerLogic_OnCompleted(object sender, EventArgs e)
         {
             VsShellUtilities.ShowMessageBox(
                 ServiceProvider,
@@ -84,7 +83,7 @@ namespace OliveVSIX.NugetPacker
         /// <summary>
         /// Gets the service provider from the owner package.
         /// </summary>
-        IServiceProvider ServiceProvider => package;
+        private IServiceProvider ServiceProvider => package;
 
         /// <summary>
         /// Initializes the singleton instance of the command.
@@ -102,7 +101,7 @@ namespace OliveVSIX.NugetPacker
         /// </summary>
         /// <param name="sender">Event sender.</param>
         /// <param name="e">Event args.</param>
-        void MenuItemCallback(object sender, EventArgs e)
+        private void MenuItemCallback(object sender, EventArgs e)
         {
             ExceptionOccurred = false;
             var dte2 = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE80.DTE2;

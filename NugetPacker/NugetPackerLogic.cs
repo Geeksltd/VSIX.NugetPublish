@@ -6,26 +6,24 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using System.Xml;
+using System.Xml.Linq;
 
 namespace OliveVSIX.NugetPacker
 {
     public delegate void ExceptionHandler(object sender, Exception arg);
 
-    static class NugetPackerLogic
+    internal static class NugetPackerLogic
     {
-        const string NUSPEC_FILE_NAME = "Package.nuspec";
-        const string NUGET_FILE_NAME = "nuget.exe";
-        const string OUTPUT_FOLDER = "NugetPackages";
-        const string API_KEY_CONTAINING_FILE = @"C:\Projects\NUGET-Publish-Key.txt";
-
-        static DTE2 Dte2;
-        static string NugetExe;
-        static string SolutionPath;
-        static string ApiKey;
-        static string NugetPackagesFolder;
-
-        static System.Threading.Thread Thread;
+        private const string NUSPEC_FILE_NAME = "Package.nuspec";
+        private const string NUGET_FILE_NAME = "nuget.exe";
+        private const string OUTPUT_FOLDER = "NugetPackages";
+        private const string API_KEY_CONTAINING_FILE = @"C:\Projects\NUGET-Publish-Key.txt";
+        private static DTE2 Dte2;
+        private static string NugetExe;
+        private static string SolutionPath;
+        private static string ApiKey;
+        private static string NugetPackagesFolder;
+        private static System.Threading.Thread Thread;
 
         public static event EventHandler OnCompleted;
         public static event ExceptionHandler OnException;
@@ -58,9 +56,12 @@ namespace OliveVSIX.NugetPacker
             Thread.Start();
         }
 
-        static void InvokeException(Exception exception) => OnException?.Invoke(null, exception);
+        private static void InvokeException(Exception exception)
+        {
+            OnException?.Invoke(null, exception);
+        }
 
-        static void PackSingleProject(Project proj)
+        private static void PackSingleProject(Project proj)
         {
             var projectPath = Path.GetDirectoryName(proj.FullName);
             var nuspecAddress = Path.Combine(projectPath, NUSPEC_FILE_NAME);
@@ -75,7 +76,7 @@ namespace OliveVSIX.NugetPacker
             }
         }
 
-        static void GenerateNugetFromNuspec(string nuspecAddress)
+        private static void GenerateNugetFromNuspec(string nuspecAddress)
         {
             var packageFilename = UpdateNuspecVersionThenReturnPackageName(nuspecAddress);
 
@@ -88,7 +89,7 @@ namespace OliveVSIX.NugetPacker
                 InvokeException(new Exception(packingMessage));
         }
 
-        static void GenerateNugetFromVSProject(string projectAddress)
+        private static void GenerateNugetFromVSProject(string projectAddress)
         {
             var packageFilename = UpdateVisualStudioPackageVersionThenReturnPackageName(projectAddress);
 
@@ -101,24 +102,25 @@ namespace OliveVSIX.NugetPacker
                 InvokeException(new Exception(packingMessageDotnet));
         }
 
-        static bool TryPush(string packageFilename, out string message)
+        private static bool TryPush(string packageFilename, out string message)
         {
             if (!ExecuteNuget($"push \"{NugetPackagesFolder}\\{packageFilename}\" {ApiKey} -NonInteractive -Source https://www.nuget.org/api/v2/package", out message, NugetExe))
                 return false;
-
             return true;
         }
 
-        static bool TryPackNuget(string nuspecAddress, out string message) =>
-            ExecuteNuget($"pack \"{nuspecAddress}\" -OutputDirectory \"{NugetPackagesFolder}\"", out message, NugetExe);
+        private static bool TryPackNuget(string nuspecAddress, out string message)
+        {
+            return ExecuteNuget($"pack \"{nuspecAddress}\" -OutputDirectory \"{NugetPackagesFolder}\"", out message, NugetExe);
+        }
 
-        static bool TryPackDotnet(string projectAddress, out string message)
+        private static bool TryPackDotnet(string projectAddress, out string message)
         {
             ExecuteNuget($"build \"{projectAddress}\" -v q", out message, "dotnet");
             return ExecuteNuget($"pack \"{projectAddress}\" -o \"{NugetPackagesFolder}\"", out message, "dotnet");
         }
 
-        static bool ExecuteNuget(string arguments, out string message, string processStart)
+        private static bool ExecuteNuget(string arguments, out string message, string processStart)
         {
             var startInfo = new ProcessStartInfo(processStart)
             {
@@ -151,54 +153,85 @@ namespace OliveVSIX.NugetPacker
                 return false;
             }
         }
-
-        static string UpdateNuspecVersionThenReturnPackageName(string nuspecAddress)
+        /// <summary>
+        /// for nuspec files
+        /// https://docs.microsoft.com/en-us/nuget/reference/nuspec#example-nuspec-files
+        /// </summary>
+        /// <param name="nuspecAddress"></param>
+        /// <returns></returns>
+        private static string UpdateNuspecVersionThenReturnPackageName(string nuspecAddress)
         {
-            var doc = new XmlDocument();
-            doc.Load(nuspecAddress);
+            var doc = XDocument.Parse(File.ReadAllText(nuspecAddress));
+            var ns = doc.Root.GetDefaultNamespace();
+            var rootPackage = doc.Descendants(ns + "package");
+            var PackageId = rootPackage.Descendants(ns + "id");
+            if (!PackageId.Any())
+                InvokeException(new Exception("id not found please referer to https://docs.microsoft.com/en-us/nuget/reference/nuspec#example-nuspec-files"));
 
-            // TODO: This is not a proper way to access to xml nodes. It is just a in rush code.
-            var idNode = doc.ChildNodes[1].ChildNodes[0].ChildNodes[0];
-            var versionNode = doc.ChildNodes[1].ChildNodes[0].ChildNodes[1];
+            var versionNode = rootPackage.Descendants(ns + "version").FirstOrDefault();
+            var newPackageVersion = IncrementPackageVersion(doc, versionNode, nuspecAddress);
+            return $"{PackageId.FirstOrDefault().Value}.{newPackageVersion.ToString()}.nupkg";
+        }
+        /// <summary>
+        /// for csprojects
+        /// </summary>
+        /// <param name="projectAddress"></param>
+        /// <returns></returns>
+        private static string UpdateVisualStudioPackageVersionThenReturnPackageName(string projectAddress)
+        {
+            var doc = XDocument.Parse(File.ReadAllText(projectAddress));
+            var root = (from node in doc.Descendants(XName.Get("PropertyGroup"))
+                        where node.Elements(XName.Get("PackageId")).Any()
+                        select node).FirstOrDefault();
 
-            var versionParts = versionNode.InnerText.Split('.');
-            var minorPart = int.Parse(versionParts.LastOrDefault()) + 1;
+            var PackageId = root.Descendants(XName.Get("PackageId"));
+            var packageVersionNode = root.Descendants(XName.Get("PackageVersion")).FirstOrDefault();
 
-            var newVersion = string.Empty;
-            for (var index = 0; index < versionParts.Length - 1; index++)
-                newVersion += $"{versionParts[index]}.";
+            if (packageVersionNode == null)
+            {
+                var assemblyVersionNode = root.Descendants(XName.Get("Version"));
+                packageVersionNode = new XElement(XName.Get("PackageVersion"));
+                if (assemblyVersionNode.Any())
+                {
+                    packageVersionNode.Value = assemblyVersionNode.FirstOrDefault().Value;
+                    root.Add(packageVersionNode);
+                }
+                else
+                {
+                    // when PackageVersion or Version not found
+                    packageVersionNode.Value = "1.0.0";
+                    root.Add(packageVersionNode);
+                }
+            }
 
-            versionNode.InnerText = $"{newVersion}{minorPart}";
+            var newPackageVersion = IncrementPackageVersion(doc, packageVersionNode, projectAddress);
+            if (!PackageId.Any())
+                throw new Exception("PackageId Not found");
 
-            doc.Save(nuspecAddress);
-
-            return $"{idNode.InnerText}.{versionNode.InnerText}.nupkg";
+            return $"{PackageId.FirstOrDefault().Value}.{newPackageVersion.ToString()}.nupkg";
         }
 
-        static string UpdateVisualStudioPackageVersionThenReturnPackageName(string projectAddress)
+        private static Version IncrementPackageVersion(XDocument doc, XElement packageVersionNode, string projectAddress)
         {
-            var doc = new XmlDocument();
-            doc.Load(projectAddress);
+            var newPackageVersion = new Version();
+            if (packageVersionNode != null)
+            {
+                if (!Version.TryParse(packageVersionNode.Value, out var ver))
+                    throw new Exception("Version Format must to 1.0.0.0 or 1.0.0 or 1.0");
 
-            var projectFile = doc.SelectSingleNode("Project/PropertyGroup");
-            var idNode = projectFile.SelectSingleNode("PackageId");
-            var versionNode = projectFile.SelectSingleNode("Version");
-
-            var versionParts = versionNode.InnerText.Split('.');
-            var minorPart = int.Parse(versionParts.LastOrDefault()) + 1;
-
-            var newVersion = string.Empty;
-            for (var index = 0; index < versionParts.Length - 1; index++)
-                newVersion += $"{versionParts[index]}.";
-
-            versionNode.InnerText = $"{newVersion}{minorPart}";
-
-            doc.Save(projectAddress);
-
-            return $"{idNode.InnerText}.{versionNode.InnerText}.nupkg";
+                if (ver.Revision < 0)
+                    newPackageVersion = new Version(ver.Major, ver.Minor, ver.Build + 1);
+                else
+                    newPackageVersion = new Version(ver.Major, ver.Minor, ver.Build + 1, ver.Revision);
+                packageVersionNode.Value = newPackageVersion.ToString();
+                doc.Save(projectAddress);
+            }
+            else
+                throw new Exception("PackageVersion Or Version Not found");
+            return newPackageVersion;
         }
 
-        static IEnumerable<Project> GetSelectedProjectPath()
+        private static IEnumerable<Project> GetSelectedProjectPath()
         {
             var uih = Dte2.ToolWindows.SolutionExplorer;
             var selectedItems = (Array)uih.SelectedItems;
