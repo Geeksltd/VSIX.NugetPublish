@@ -36,7 +36,7 @@ namespace OliveVSIX.NugetPacker
             SolutionPath = Path.GetDirectoryName(Dte2.Solution.FullName);
             NugetExe = Path.Combine(SolutionPath, NUGET_FILE_NAME);
             if (!File.Exists(NugetExe))
-                throw new Exception($"nuget.exe not found {NugetExe} - it based on solution directory");
+                throw new Exception($"nuget.exe not found {NugetExe} - it is based on solution directory");
             ApiKey = File.ReadAllText(API_KEY_CONTAINING_FILE);
             NugetPackagesFolder = Path.Combine(SolutionPath, OUTPUT_FOLDER);
 
@@ -188,6 +188,10 @@ namespace OliveVSIX.NugetPacker
                         select node).FirstOrDefault();
 
             var PackageId = root.Descendants(XName.Get("PackageId"));
+
+            if (!PackageId.Any())
+                throw new Exception("PackageId Not found");
+
             var packageVersionNode = root.Descendants(XName.Get("PackageVersion")).FirstOrDefault();
 
             if (packageVersionNode == null)
@@ -208,8 +212,7 @@ namespace OliveVSIX.NugetPacker
             }
 
             var newPackageVersion = IncrementPackageVersion(doc, packageVersionNode, projectAddress);
-            if (!PackageId.Any())
-                throw new Exception("PackageId Not found");
+
 
             return $"{PackageId.FirstOrDefault().Value}.{newPackageVersion.ToString()}.nupkg";
         }

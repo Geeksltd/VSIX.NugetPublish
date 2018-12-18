@@ -27,6 +27,12 @@ namespace OliveVSIX.NugetPacker
         /// </summary>
         private readonly Package package;
 
+        private readonly ErrorListProvider errorList;
+
+
+        private readonly IVsSolution ivsSolution;
+
+
         /// <summary>
         /// Initializes a new instance of the <see cref="NugetPacker"/> class.
         /// Adds our command handlers for menu (commands must exist in the command table file)
@@ -35,6 +41,9 @@ namespace OliveVSIX.NugetPacker
         private NugetPacker(Package package)
         {
             this.package = package ?? throw new ArgumentNullException("package");
+
+            errorList = new ErrorListProvider(this.package);
+            ivsSolution = (IVsSolution)Package.GetGlobalService(typeof(IVsSolution));
 
             if (ServiceProvider.GetService(typeof(IMenuCommandService)) is OleMenuCommandService commandService)
             {
@@ -49,7 +58,39 @@ namespace OliveVSIX.NugetPacker
 
         private void NugetPackerLogic_OnException(object sender, Exception arg)
         {
+            Log(arg);
+        }
+
+        /// <summary>
+        /// based on https://gist.github.com/DinisCruz/3185313#file-gistfile1-cs
+        /// </summary>
+        /// <param name="arg"></param>
+        private void Log(Exception arg)
+        {
             ExceptionOccurred = true;
+
+            var dte2 = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE80.DTE2;
+
+            var proj = dte2.Solution.Projects.Item(1);
+            var projectUniqueName = proj.FileName;
+            var firstFileInProject = proj.ProjectItems.Item(1).FileNames[0];
+
+            //Get first project IVsHierarchy item (needed to link the task with a project)
+
+            ivsSolution.GetProjectOfUniqueName(projectUniqueName, out IVsHierarchy hierarchyItem);
+            var task = new ErrorTask()
+            {
+                ErrorCategory = TaskErrorCategory.Error,
+                Category = TaskCategory.BuildCompile,
+                Text = arg.ToString() + (arg.InnerException != null ? arg.InnerException.ToString() : ""),
+                Document = firstFileInProject,
+                // Line = 2,
+                // Column = 6,
+                HierarchyItem = hierarchyItem
+            };
+            errorList.Tasks.Clear();
+            errorList.Tasks.Add(task);
+            errorList.Show();
 
             VsShellUtilities.ShowMessageBox(
                 ServiceProvider,
@@ -80,6 +121,7 @@ namespace OliveVSIX.NugetPacker
             private set;
         }
 
+
         /// <summary>
         /// Gets the service provider from the owner package.
         /// </summary>
@@ -104,8 +146,17 @@ namespace OliveVSIX.NugetPacker
         private void MenuItemCallback(object sender, EventArgs e)
         {
             ExceptionOccurred = false;
-            var dte2 = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE80.DTE2;
-            NugetPackerLogic.Pack(dte2);
+            try
+            {
+
+
+                var dte2 = Package.GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE80.DTE2;
+                NugetPackerLogic.Pack(dte2);
+            }
+            catch (Exception ex)
+            {
+                Log(ex);
+            }
         }
     }
 }
