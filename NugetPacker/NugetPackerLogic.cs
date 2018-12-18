@@ -31,9 +31,12 @@ namespace OliveVSIX.NugetPacker
         public static void Pack(DTE2 dte2)
         {
             Dte2 = dte2;
-
+            if (string.IsNullOrEmpty(Dte2.Solution.FullName))
+                throw new Exception("Before publish please save solution file...");
             SolutionPath = Path.GetDirectoryName(Dte2.Solution.FullName);
             NugetExe = Path.Combine(SolutionPath, NUGET_FILE_NAME);
+            if (!File.Exists(NugetExe))
+                throw new Exception($"nuget.exe not found {NugetExe} - it based on solution directory");
             ApiKey = File.ReadAllText(API_KEY_CONTAINING_FILE);
             NugetPackagesFolder = Path.Combine(SolutionPath, OUTPUT_FOLDER);
 
