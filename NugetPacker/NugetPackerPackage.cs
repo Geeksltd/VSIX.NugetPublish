@@ -1,65 +1,134 @@
 ﻿using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.Threading;
 using System;
+using System.ComponentModel.Design;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace OliveVSIX.NugetPacker
 {
-    /// <summary>
-    /// This is the class that implements the package exposed by this assembly.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The minimum requirement for a class to be considered a valid package for Visual Studio
-    /// is to implement the IVsPackage interface and register itself with the shell.
-    /// This package uses the helper classes defined inside the Managed Package Framework (MPF)
-    /// to do it: it derives from the Package class that provides the implementation of the
-    /// IVsPackage interface and uses the registration attributes defined in the framework to
-    /// register itself and its components with the shell. These attributes tell the pkgdef creation
-    /// utility what data to put into .pkgdef file.
-    /// </para>
-    /// <para>
-    /// To get loaded into VS, the package must be referred by &lt;Asset Type="Microsoft.VisualStudio.VsPackage" ...&gt; in .vsixmanifest file.
-    /// </para>
-    /// </remarks>
+
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
+    [ProvideService(typeof(IMenuCommandService), IsAsyncQueryable = true)]
     [InstalledProductRegistration("#110", "#112", "1.0", IconResourceID = 400)] // Info on this package for Help/About
     [ProvideMenuResource("Menus.ctmenu", 1)]
-    [Guid(NugetPackerPackage.PackageGuidString)]
+    [Guid(PackageGuidString)]
     [SuppressMessage("StyleCop.CSharp.DocumentationRules", "SA1650:ElementDocumentationMustBeSpelledCorrectly", Justification = "pkgdef, VS and vsixmanifest are valid VS terms")]
+
     public sealed class NugetPackerPackage : AsyncPackage
     {
-        /// <summary>
-        /// NugetPackerPackage GUID string.
-        /// </summary>
         public const string PackageGuidString = "aebcdf85-651a-4513-8f1c-a706edd15c5c";
+        public const int CommandId = 0x0100;
+        public static readonly Guid CommandSet = new Guid("090581b5-cfbb-40d7-9ff4-bdc7f81edef5");
+        public static NugetPackerPackage Instance
+        {
+            get;
+            private set;
+        }
+        private bool ExceptionOccurred;
+        private readonly AsyncPackage package;
+        private readonly ErrorListProvider errorList;
+        private readonly IVsSolution ivsSolution;
+        private Microsoft.VisualStudio.Shell.IAsyncServiceProvider ServiceProvider => package;
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="NugetPacker"/> class.
-        /// </summary>
         public NugetPackerPackage()
         {
-            // Inside this method you can place any initialization code that does not require
-            // any Visual Studio service because at this point the package object is created but
-            // not sited yet inside Visual Studio environment. The place to do all the other
-            // initialization is the Initialize method.
         }
-
-        #region Package Members
-
-        /// <summary>
-        /// Initialization of the package; this method is called right after the package is sited, so this is the place
-        /// where you can put all the initialization code that rely on services provided by VisualStudio.
-        /// </summary>
+        public NugetPackerPackage(AsyncPackage package)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            this.package = package ?? throw new ArgumentNullException("package");
+            errorList = new ErrorListProvider(this.package);
+            ivsSolution = (IVsSolution)GetGlobalService(typeof(IVsSolution));
+        }
 
         protected override async System.Threading.Tasks.Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
-            NugetPacker.Initialize(this);
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             await base.InitializeAsync(cancellationToken, progress);
 
+            Instance = new NugetPackerPackage(this);
+
+            if (await GetServiceAsync(typeof(IMenuCommandService)) is OleMenuCommandService commandService)
+            {
+                var menuCommandID = new CommandID(CommandSet, CommandId);
+                var menuItem = new MenuCommand(MenuItemCallback, menuCommandID);
+                commandService.AddCommand(menuItem);
+
+                NugetPackerLogic.OnCompleted += NugetPackerLogic_OnCompleted;
+                NugetPackerLogic.OnException += NugetPackerLogic_OnException;
+            }
+        }
+        private void NugetPackerLogic_OnException(object sender, Exception arg)
+        {
+            Log(arg);
+        }
+        private async void NugetPackerLogic_OnCompleted(object sender, EventArgs e)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+            VsShellUtilities.ShowMessageBox(
+                this,
+                ExceptionOccurred ? "The process completed with error(s)." : "The selected projects are updated.",
+                "Nuget updater",
+                OLEMSGICON.OLEMSGICON_INFO,
+                OLEMSGBUTTON.OLEMSGBUTTON_OK,
+                OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
+        }
+        private void MenuItemCallback(object sender, EventArgs e)
+        {
+            ExceptionOccurred = false;
+            try
+            {
+                var dte2 = GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE80.DTE2;
+                NugetPackerLogic.Pack(dte2);
+            }
+            catch (Exception ex)
+            {
+                Log(ex);
+            }
+        }
+        private async void Log(Exception arg)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+            ExceptionOccurred = true;
+
+            var dte2 = GetGlobalService(typeof(EnvDTE.DTE)) as EnvDTE80.DTE2;
+
+            var proj = dte2.Solution.Projects.Item(1);
+            var projectUniqueName = proj.FileName;
+            var firstFileInProject = proj.ProjectItems.Item(1).FileNames[0];
+
+            //Get first project IVsHierarchy item (needed to link the task with a project)
+
+            Instance.ivsSolution.GetProjectOfUniqueName(projectUniqueName, out IVsHierarchy hierarchyItem);
+
+            var task = new ErrorTask()
+            {
+                ErrorCategory = TaskErrorCategory.Error,
+                Category = TaskCategory.BuildCompile,
+                Text = arg.ToString() + (arg.InnerException != null ? arg.InnerException.ToString() : ""),
+                Document = firstFileInProject,
+                // Line = 2,
+                // Column = 6,
+                HierarchyItem = hierarchyItem
+            };
+
+            Instance.errorList.Tasks.Clear();
+            Instance.errorList.Tasks.Add(task);
+            Instance.errorList.Show();
+
+            VsShellUtilities.ShowMessageBox(
+                this,
+                arg.Message,
+                arg.GetType().ToString(),
+                OLEMSGICON.OLEMSGICON_CRITICAL,
+                OLEMSGBUTTON.OLEMSGBUTTON_OK,
+                OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
         }
 
-        #endregion
     }
 }
