@@ -25,7 +25,7 @@ namespace OliveVSIX.NugetPacker
         private static string NugetPackagesFolder;
         private static System.Threading.Thread Thread;
 
-        public static event EventHandler OnCompleted;
+        public static event EventHandler<string[]> OnCompleted;
         public static event ExceptionHandler OnException;
 
         public static void Pack(DTE2 dte2)
@@ -42,17 +42,22 @@ namespace OliveVSIX.NugetPacker
 
             var start = new System.Threading.ThreadStart(() =>
             {
+                var completed = new List<string>();
+                var failed = new List<string>();
+
                 try
                 {
                     foreach (var item in GetSelectedProjectPath())
-                        PackSingleProject(item);
+                        if (PackSingleProject(item))
+                            completed.Add(item.Name);
+                        else failed.Add(item.Name);
                 }
                 catch (Exception exception)
                 {
                     InvokeException(exception);
                 }
 
-                OnCompleted?.Invoke(null, EventArgs.Empty);
+                OnCompleted?.Invoke(null, completed.ToArray());
             });
 
             Thread = new System.Threading.Thread(start) { IsBackground = true };
@@ -64,45 +69,52 @@ namespace OliveVSIX.NugetPacker
             OnException?.Invoke(null, exception);
         }
 
-        private static void PackSingleProject(Project proj)
+        static bool PackSingleProject(Project proj)
         {
             var projectPath = Path.GetDirectoryName(proj.FullName);
             var nuspecAddress = Path.Combine(projectPath, NUSPEC_FILE_NAME);
 
             if (!File.Exists(nuspecAddress))
             {
-                GenerateNugetFromVSProject(proj.FileName);
+                return GenerateNugetFromVSProject(proj.FileName);
             }
             else
             {
-                GenerateNugetFromNuspec(nuspecAddress);
+                return GenerateNugetFromNuspec(nuspecAddress);
             }
         }
 
-        private static void GenerateNugetFromNuspec(string nuspecAddress)
+        static bool GenerateNugetFromNuspec(string nuspecAddress)
         {
             var packageFilename = UpdateNuspecVersionThenReturnPackageName(nuspecAddress);
 
             if (TryPackNuget(nuspecAddress, out string packingMessage))
             {
-                if (!TryPush(packageFilename, out string pushingMessage))
-                    InvokeException(new Exception(pushingMessage));
+                if (TryPush(packageFilename, out string pushingMessage)) return true;
+                InvokeException(new Exception(pushingMessage));
             }
             else
                 InvokeException(new Exception(packingMessage));
+            return false;
         }
 
-        private static void GenerateNugetFromVSProject(string projectAddress)
+        private static bool GenerateNugetFromVSProject(string projectAddress)
         {
             var packageFilename = UpdateVisualStudioPackageVersionThenReturnPackageName(projectAddress);
 
-            if (TryPackDotnet(projectAddress, out string packingMessageDotnet))
+            if (TryPackDotnet(projectAddress, out var packingMessageDotnet))
             {
-                if (!TryPush(packageFilename, out string pushingMessage))
-                    InvokeException(new Exception(pushingMessage));
+                if (TryPush(packageFilename, out var pushingMessage))
+                    return true;
+
+                InvokeException(new Exception(pushingMessage));
             }
             else
+            {
                 InvokeException(new Exception(packingMessageDotnet));
+            }
+
+            return false;
         }
 
         private static bool TryPush(string packageFilename, out string message)
@@ -120,7 +132,7 @@ namespace OliveVSIX.NugetPacker
         private static bool TryPackDotnet(string projectAddress, out string message)
         {
             ExecuteNuget($"build \"{projectAddress}\" -v q", out message, "dotnet");
-            return ExecuteNuget($"pack \"{projectAddress}\" -o \"{NugetPackagesFolder}\"", out message, "dotnet");
+            return ExecuteNuget($"pack \"{projectAddress}\" --no-build -o \"{NugetPackagesFolder}\"", out message, "dotnet");
         }
 
         private static bool ExecuteNuget(string arguments, out string message, string processStart)
@@ -137,11 +149,11 @@ namespace OliveVSIX.NugetPacker
 
             var process = System.Diagnostics.Process.Start(startInfo);
 
-            Task.WhenAny(Task.Delay(15000), Task.Factory.StartNew(process.WaitForExit)).Wait();
+            Task.WhenAny(Task.Delay(20000), Task.Factory.StartNew(process.WaitForExit)).Wait();
 
             if (!process.HasExited)
             {
-                message = "Build did not complete after 15 seconds.\n" +
+                message = "Build did not complete after 20 seconds.\n" +
                     "Command: " + startInfo.WorkingDirectory + "> " + processStart + " " + arguments;
                 return false;
             }
@@ -185,13 +197,13 @@ namespace OliveVSIX.NugetPacker
         {
             var doc = XDocument.Parse(File.ReadAllText(projectAddress));
             var root = (from node in doc.Descendants(XName.Get("PropertyGroup"))
-                        where node.Elements(XName.Get("PackageId")).Any()
+                        where node.Elements(XName.Get("PackageId")).Any() ||
+                        node.Elements(XName.Get("PackageVersion")).Any()
                         select node).FirstOrDefault();
 
-            var PackageId = root.Descendants(XName.Get("PackageId"));
+            var PackageId = root?.Descendants(XName.Get("PackageId")).FirstOrDefault()?.Value;
 
-            if (!PackageId.Any())
-                throw new Exception("PackageId Not found");
+            PackageId = PackageId ?? new FileInfo(projectAddress).Name.Replace(".csproj", "");
 
             var packageVersionNode = root.Descendants(XName.Get("PackageVersion")).FirstOrDefault();
 
@@ -214,8 +226,7 @@ namespace OliveVSIX.NugetPacker
 
             var newPackageVersion = IncrementPackageVersion(doc, packageVersionNode, projectAddress);
 
-
-            return $"{PackageId.FirstOrDefault().Value}.{newPackageVersion.ToString()}.nupkg";
+            return $"{PackageId}.{newPackageVersion}.nupkg";
         }
 
         private static Version IncrementPackageVersion(XDocument doc, XElement packageVersionNode, string projectAddress)

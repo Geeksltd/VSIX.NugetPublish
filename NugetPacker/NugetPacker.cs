@@ -1,6 +1,7 @@
 ﻿using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using System;
+using System.Linq;
 using System.ComponentModel.Design;
 
 namespace OliveVSIX.NugetPacker
@@ -64,7 +65,6 @@ namespace OliveVSIX.NugetPacker
         /// <summary>
         /// based on https://gist.github.com/DinisCruz/3185313#file-gistfile1-cs
         /// </summary>
-        /// <param name="arg"></param>
         private void Log(Exception arg)
         {
             ExceptionOccurred = true;
@@ -73,7 +73,7 @@ namespace OliveVSIX.NugetPacker
 
             var proj = dte2.Solution.Projects.Item(1);
             var projectUniqueName = proj.FileName;
-            var firstFileInProject = proj.ProjectItems.Item(1).FileNames[0];
+            //var firstFileInProject = proj.ProjectItems?.Item(0)?.FileNames[0];
 
             //Get first project IVsHierarchy item (needed to link the task with a project)
 
@@ -83,7 +83,7 @@ namespace OliveVSIX.NugetPacker
                 ErrorCategory = TaskErrorCategory.Error,
                 Category = TaskCategory.BuildCompile,
                 Text = arg.ToString() + (arg.InnerException != null ? arg.InnerException.ToString() : ""),
-                Document = firstFileInProject,
+                //Document = firstFileInProject,
                 // Line = 2,
                 // Column = 6,
                 HierarchyItem = hierarchyItem
@@ -101,12 +101,13 @@ namespace OliveVSIX.NugetPacker
                 OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
         }
 
-        private void NugetPackerLogic_OnCompleted(object sender, EventArgs e)
+        void NugetPackerLogic_OnCompleted(object sender, string[] projects)
         {
             VsShellUtilities.ShowMessageBox(
                 ServiceProvider,
-                ExceptionOccurred ? "The process completed with error(s)." : "The selected projects are updated.",
-                "Nuget updater",
+                (ExceptionOccurred ? "Completed with error(s)." : "All good") +
+                "\nSuccessful:\n\n" + string.Join("\n", projects),
+                "Nuget publish result",
                 OLEMSGICON.OLEMSGICON_INFO,
                 OLEMSGBUTTON.OLEMSGBUTTON_OK,
                 OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);
